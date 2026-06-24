@@ -4,8 +4,8 @@ import logging
 import os
 import threading
 import time
-import socket
 import subprocess
+import wakeonlan
 
 ACCESS_LOG_FILE = "/config/log/nginx/access.log"
 LOG_FILE = "/config/log/ondemand/ondemand.log"
@@ -36,21 +36,6 @@ class ContainerThread(threading.Thread):
             logging.exception(e)
             os._exit(1)
 
-    def send_wol(self, mac_address, broadcast_address="255.255.255.255"):
-        clean_mac = mac_address.replace(":", "").replace("-", "")
-        if len(clean_mac) != 12:
-            logging.warning(f"Invalid MAC address: {mac_address}")
-            return
-
-        mac_bytes = bytes.fromhex(clean_mac)
-        packet = b'\xff' * 6 + mac_bytes * 16
-
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            s.sendto(packet, (broadcast_address, 7))
-            
-        logging.info(f"Sent WoL packet to {mac_address} on {broadcast_address}")
-
     def handle_wol(self, container):
         mac_address = container.labels.get("swag_ondemand_mac")
         broadcast_address = container.labels.get("swag_ondemand_broadcast", "255.255.255.255")
@@ -64,7 +49,8 @@ class ContainerThread(threading.Thread):
                 ping_success = True
 
         if mac_address and (not ip_to_ping or not ping_success):
-            self.send_wol(mac_address, broadcast_address)
+            wakeonlan.send_magic_packet(mac_address, ip_address=broadcast_address, port=9)
+            logging.info(f"Sent WoL packet to {mac_address} on {broadcast_address}")
 
     def process_containers(self):
         containers = self.docker_client.containers.list(all=True, filters={ "label": ["swag_ondemand=enable"] })

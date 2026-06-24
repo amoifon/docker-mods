@@ -21,4 +21,6 @@ if [ ! -f /config/nginx/ondemand.conf ]; then
     lsiown -R abc:abc /config/nginx/ondemand.conf
 fi
 
+echo "\
+    wakeonlan" >> /mod-pip-packages-to-install.list
 echo "Applied the swag-ondemand mod"

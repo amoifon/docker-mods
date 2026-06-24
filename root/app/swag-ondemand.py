@@ -42,7 +42,7 @@ class ContainerThread(threading.Thread):
             logging.warning(f"Invalid MAC address: {mac_address}")
             return
 
-        packet = b'\xff' * 6 + b'\x00' * 12 * 16
+        packet = bytearray([0xff] * 6 + [0x00] * 12)
         for i in range(16):
             packet[6 + i*6 : 12 + i*6] = bytes.fromhex(clean_mac)
 

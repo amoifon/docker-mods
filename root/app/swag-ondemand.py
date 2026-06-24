@@ -4,6 +4,8 @@ import logging
 import os
 import threading
 import time
+import socket
+import subprocess
 
 ACCESS_LOG_FILE = "/config/log/nginx/access.log"
 LOG_FILE = "/config/log/ondemand/ondemand.log"
@@ -33,6 +35,36 @@ class ContainerThread(threading.Thread):
         except Exception as e:
             logging.exception(e)
             os._exit(1)
+
+    def send_wol(self, mac_address, broadcast_address="255.255.255.255"):
+        clean_mac = mac_address.replace(":", "").replace("-", "")
+        if len(clean_mac) != 12:
+            logging.warning(f"Invalid MAC address: {mac_address}")
+            return
+
+        packet = b'\xff' * 6 + b'\x00' * 12 * 16
+        for i in range(16):
+            packet[6 + i*6 : 12 + i*6] = bytes.fromhex(clean_mac)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            s.sendto(packet, (broadcast_address, 7))
+        logging.info(f"Sent WoL packet to {mac_address} on {broadcast_address}")
+
+    def handle_wol(self, container):
+        mac_address = container.labels.get("swag_ondemand_mac")
+        broadcast_address = container.labels.get("swag_ondemand_broadcast", "255.255.255.255")
+        ip_to_ping = container.labels.get("swag_ondemand_ip")
+
+        ping_success = False
+        if ip_to_ping:
+            result = subprocess.run(["ping", "-c", "1", "-W", "2", ip_to_ping], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if result.returncode == 0:
+                logging.info(f"IP {ip_to_ping} responded to ping, skipping WoL for {container.name}")
+                ping_success = True
+
+        if mac_address and (not ip_to_ping or not ping_success):
+            self.send_wol(mac_address, broadcast_address)
 
     def process_containers(self):
         containers = self.docker_client.containers.list(all=True, filters={ "label": ["swag_ondemand=enable"] })
@@ -78,9 +110,13 @@ class ContainerThread(threading.Thread):
                     continue
                 self.ondemand_containers[container_name]["last_accessed"] = datetime.now()
                 accessed = True
+            
             if not accessed or self.ondemand_containers[container_name]["status"] == "running":
                 continue
-            self.docker_client.containers.get(container_name).start()
+
+            container = self.docker_client.containers.get(container_name)
+            self.handle_wol(container)
+            container.start()
             logging.info(f"Started {container_name}")
             self.ondemand_containers[container_name]["status"] = "running"
 

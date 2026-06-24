@@ -42,13 +42,13 @@ class ContainerThread(threading.Thread):
             logging.warning(f"Invalid MAC address: {mac_address}")
             return
 
-        packet = bytearray([0xff] * 6 + [0x00] * 12)
-        for i in range(16):
-            packet[6 + i*6 : 12 + i*6] = bytes.fromhex(clean_mac)
+        mac_bytes = bytes.fromhex(clean_mac)
+        packet = b'\xff' * 6 + mac_bytes * 16
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             s.sendto(packet, (broadcast_address, 7))
+            
         logging.info(f"Sent WoL packet to {mac_address} on {broadcast_address}")
 
     def handle_wol(self, container):

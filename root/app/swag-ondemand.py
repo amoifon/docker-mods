@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 
 ACCESS_LOG_FILE = "/config/log/nginx/access.log"
 LOG_FILE = "/config/log/ondemand/ondemand.log"
@@ -19,9 +20,10 @@ class ContainerThread(threading.Thread):
         super().__init__()
         self.daemon = True
         self.ondemand_containers = {}
-        self.init_docker()
+        self.docker_client = None
+        self.init_docker(fatal=True)
 
-    def init_docker(self):
+    def init_docker(self, fatal=False):
         try:
             docker_host = os.environ.get("DOCKER_HOST", None)
             if docker_host:
@@ -31,8 +33,10 @@ class ContainerThread(threading.Thread):
             else:
                 self.docker_client = docker.from_env()
         except Exception as e:
-            logging.exception(e)
-            os._exit(1)
+            if fatal:
+                logging.exception(e)
+                os._exit(1)
+            raise
 
     def process_containers(self):
         containers = self.docker_client.containers.list(all=True, filters={ "label": ["swag_ondemand=enable"] })
@@ -91,8 +95,17 @@ class ContainerThread(threading.Thread):
                 self.start_containers()
                 self.stop_containers()
                 time.sleep(CONTAINER_QUERY_SLEEP)
+            except docker.errors.DockerException as e:
+                logging.exception(e)
+                time.sleep(CONTAINER_QUERY_SLEEP)
+                try:
+                    self.init_docker()
+                    logging.info("Reconnected to Docker daemon")
+                except Exception:
+                    pass
             except Exception as e:
                 logging.exception(e)
+                time.sleep(CONTAINER_QUERY_SLEEP)
 
 class LogReaderThread(threading.Thread):
     def __init__(self):
@@ -137,11 +150,17 @@ class LogReaderThread(threading.Thread):
 
 if __name__ == "__main__":
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-    logging.basicConfig(filename=LOG_FILE,
-                    filemode='a',
-                    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S',
-                    level=logging.INFO)
+    handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=3
+    )
+    handler.setFormatter(logging.Formatter(
+        fmt='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.INFO)
     logging.info("Starting swag-ondemand...")
 
     ContainerThread().start()
